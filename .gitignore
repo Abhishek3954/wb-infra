@@ -1,0 +1,26 @@
+# Local Terraform folder containing downloaded modules & providers
+.terraform/
+
+# Terraform CLI configuration/credentials files
+.terraformrc
+terraform.rc
+
+# Terraform state files (DO NOT push these if they contain sensitive infrastructure data)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Crash log files
+crash.log
+
+# Terraform plan output files
+*.tfplan
+*.tfplan-destroy
+tfplan
+tfplan-destroy
+
+# Variable files containing secrets (keep sensitive .tfvars local)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
