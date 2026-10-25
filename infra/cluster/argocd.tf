@@ -64,17 +64,13 @@ resource "terraform_data" "teardown_guard" {
     command     = <<-EOT
       aws eks update-kubeconfig --name ${self.input.cluster} --region ${self.input.region} --alias tf-teardown >/dev/null || exit 0
       K="kubectl --context tf-teardown"
-      $K -n argocd delete application root --ignore-not-found --wait=false
-      $K -n argocd delete application myapp --ignore-not-found --wait=true --timeout=900s
-      for i in $(seq 1 60); do
-        n=$(aws elbv2 describe-load-balancers --region ${self.input.region} --query "length(LoadBalancers[?VpcId=='${self.input.vpc_id}'])" --output text)
-        [ "$n" = "0" ] && break
-        sleep 10
-      done
-      for i in $(seq 1 60); do
-        [ "$($K get pv --no-headers 2>/dev/null | wc -l)" -eq 0 ] && break
-        sleep 10
-      done
+
+      # Trigger deletion
+      $K -n argocd delete application root myapp --ignore-not-found --wait=false
+
+      # Block precisely until Argo CD completely removes them from the API
+      $K -n argocd wait application/root --for=delete --timeout=120s || true
+      $K -n argocd wait application/myapp --for=delete --timeout=300s || true
     EOT
   }
 }
