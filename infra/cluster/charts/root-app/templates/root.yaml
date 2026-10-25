@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: {{ .Values.repoURL | quote }}
+    targetRevision: {{ .Values.revision | quote }}
+    path: platform
+    helm:
+      valuesObject:
+        repoURL: {{ .Values.repoURL | quote }}
+        revision: {{ .Values.revision | quote }}
+        clusterName: {{ .Values.clusterName | quote }}
+        region: {{ .Values.region | quote }}
+        vpcId: {{ .Values.vpcId | quote }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
