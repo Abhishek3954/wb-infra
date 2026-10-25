@@ -7,4 +7,3 @@ variable "secret_name" { type = string }
 variable "gitops_repo_url"        { type = string }
 variable "gitops_revision"        { type = string }
 variable "gitops_deploy_key_path" { type = string }
-variable "argocd_chart_version"   { type = string }
