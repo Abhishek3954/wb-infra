@@ -64,6 +64,7 @@ resource "terraform_data" "teardown_guard" {
 
   # created last, so destroyed FIRST: before Argo CD, the cluster, and the IAM that the controllers still need
   depends_on = [
+    module.vpc,
     helm_release.root_app,
     aws_eks_pod_identity_association.lbc,
     aws_eks_pod_identity_association.eso,
@@ -82,12 +83,17 @@ resource "terraform_data" "teardown_guard" {
       wait_until() {  # description, seconds, command...
         local what=$1 end=$(( $(date +%s) + $2 )); shift 2
         until "$@"; do
-          [ "$(date +%s)" -lt "$end" ] || { echo "TIMED OUT waiting for: $what" >&2; exit 1; }
+          [ "$(date +%s)" -lt "$end" ] || { echo "TIMED OUT waiting for: $what" >&2; return 1; }
           sleep 10
         done
         echo "ok: $what"
       }
       no_lbs()     { [ "$(aws elbv2 describe-load-balancers --region $R --query "length(LoadBalancers[?VpcId=='$VPC'])" --output text)" = "0" ]; }
+      no_ingresses() {
+        local ingresses
+        ingresses=$($K get ingress --all-namespaces -o name) || return 1
+        [ -z "$ingresses" ]
+      }
       vols_gone()  { for v in $VOLS; do aws ec2 describe-volumes --region $R --volume-ids $v >/dev/null 2>&1 && return 1; done; return 0; }
 
       VOLS=""
@@ -97,16 +103,15 @@ resource "terraform_data" "teardown_guard" {
         VOLS=$($K get pv -o jsonpath='{range .items[?(@.spec.csi.driver=="ebs.csi.aws.com")]}{.spec.csi.volumeHandle}{"\n"}{end}')
         echo "EBS volumes to be removed: $${VOLS:-none}"
 
-        # Detach the root Application first so its Argo finalizer does not delete
-        # child Applications concurrently. Then remove the Ingress-owning app
-        # while the AWS Load Balancer Controller is still running.
+        # Disable root auto-sync so it does not recreate child Applications
+        # while they are being removed. Keep root until Terraform destroys its
+        # root-app Helm release after this guard completes.
         if $K -n argocd get application root >/dev/null 2>&1; then
           $K -n argocd patch application root --type=merge -p='{"spec":{"syncPolicy":{"automated":null}}}'
-          $K -n argocd patch application root --type=merge -p='{"metadata":{"finalizers":[]}}'
-          $K -n argocd delete application root --ignore-not-found --wait=true --timeout=120s
         fi
 
-        # Ensure legacy live Applications also cascade-delete their resources.
+        # Remove the Ingress-owning app while the AWS Load Balancer Controller
+        # is still running. Ensure legacy live Applications cascade-delete.
         if $K -n argocd get application myapp >/dev/null 2>&1; then
           $K -n argocd patch application myapp --type=merge -p='{"metadata":{"finalizers":["resources-finalizer.argocd.argoproj.io"]}}'
         fi
@@ -115,7 +120,14 @@ resource "terraform_data" "teardown_guard" {
         # Applications may have been deleted manually without their resource
         # finalizer, leaving Ingresses behind. Delete them while the controller
         # is still running so it can remove the AWS load balancers cleanly.
-        $K delete ingress --all --all-namespaces --ignore-not-found --wait=true --timeout=900s
+        $K delete ingress --all --all-namespaces --ignore-not-found --wait=false
+
+        # Give the AWS controller time to process Ingress finalizers before
+        # falling back to direct AWS deletion. This keeps controller cleanup as
+        # the normal path while ensuring a stuck finalizer cannot block fallback.
+        if ! wait_until "Ingress cleanup by AWS Load Balancer Controller" 180 no_ingresses; then
+          echo "Ingress finalizer cleanup is still pending; checking AWS for orphaned load balancers."
+        fi
 
         # The Ingress finalizer/controller gets first chance to clean up. If
         # AWS still has an orphan after the Application is fully deleted, remove
@@ -128,10 +140,16 @@ resource "terraform_data" "teardown_guard" {
           done
         fi
         wait_until "no load balancers after myapp Ingress cleanup" 900 no_lbs
+        wait_until "Ingress objects removed after load balancer cleanup" 900 no_ingresses
 
-        # With the Ingress gone and its AWS load balancer removed, it is safe
-        # to tear down the controller and all remaining Argo CD applications.
-        $K -n argocd delete applications --all --ignore-not-found --wait=true --timeout=900s
+        # With Ingresses and load balancers gone, remove all remaining child
+        # Applications. Keep root until the root-app Helm release is removed
+        # after this guard, while Argo CD is still running to process its
+        # resources-finalizer.
+        for app in $($K -n argocd get applications -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+          [ "$app" = root ] && continue
+          $K -n argocd delete application "$app" --ignore-not-found --wait=true --timeout=900s
+        done
 
         # Also clear namespaces left behind by Applications deleted without
         # Argo resource finalizers. Preserve Kubernetes and Argo CD namespaces.
