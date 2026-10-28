@@ -60,17 +60,40 @@ resource "terraform_data" "teardown_guard" {
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["bash", "-c"]
-    on_failure  = continue
-    command     = <<-EOT
-      aws eks update-kubeconfig --name ${self.input.cluster} --region ${self.input.region} --alias tf-teardown >/dev/null || exit 0
-      K="kubectl --context tf-teardown"
+    # no on_failure: any failure or timeout STOPS the destroy; fix the cause and run destroy again
+    command = <<-EOT
+      set -euo pipefail
+      R=${self.input.region}; VPC=${self.input.vpc_id}; C=${self.input.cluster}
 
-      # Trigger deletion
-      $K -n argocd delete application root myapp --ignore-not-found --wait=false
+      wait_until() {  # description, seconds, command...
+        local what=$1 end=$(( $(date +%s) + $2 )); shift 2
+        until "$@"; do
+          [ "$(date +%s)" -lt "$end" ] || { echo "TIMED OUT waiting for: $what" >&2; exit 1; }
+          sleep 10
+        done
+        echo "ok: $what"
+      }
+      no_lbs()     { [ "$(aws elbv2 describe-load-balancers --region $R --query "length(LoadBalancers[?VpcId=='$VPC'])" --output text)" = "0" ]; }
+      vols_gone()  { for v in $VOLS; do aws ec2 describe-volumes --region $R --volume-ids $v >/dev/null 2>&1 && return 1; done; return 0; }
 
-      # Block precisely until Argo CD completely removes them from the API
-      $K -n argocd wait application/root --for=delete --timeout=120s || true
-      $K -n argocd wait application/myapp --for=delete --timeout=300s || true
+      VOLS=""
+      if aws eks describe-cluster --name $C --region $R >/dev/null 2>&1; then
+        aws eks update-kubeconfig --name $C --region $R --alias tf-teardown >/dev/null
+        K="kubectl --context tf-teardown"
+        VOLS=$($K get pv -o jsonpath='{range .items[?(@.spec.csi.driver=="ebs.csi.aws.com")]}{.spec.csi.volumeHandle}{"\n"}{end}')
+        echo "EBS volumes to be removed: $${VOLS:-none}"
+
+        $K -n argocd delete application root --ignore-not-found --wait=false     # so nothing is recreated
+        $K -n argocd delete application myapp --ignore-not-found --wait=true --timeout=1800s
+        $K -n myapp delete pvc --all --ignore-not-found --wait=true --timeout=600s
+        wait_until "no persistent volumes left" 900 bash -c "[ \"\$($K get pv --no-headers | wc -l)\" -eq 0 ]"
+      else
+        echo "cluster is already gone, checking the AWS side only"
+      fi
+
+      wait_until "no load balancers in the VPC" 900 no_lbs
+      wait_until "EBS volumes deleted" 900 vols_gone
+      echo "teardown guard: everything is gone"
     EOT
   }
 }
