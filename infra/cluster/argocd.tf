@@ -80,12 +80,12 @@ resource "terraform_data" "teardown_guard" {
       if aws eks describe-cluster --name $C --region $R >/dev/null 2>&1; then
         aws eks update-kubeconfig --name $C --region $R --alias tf-teardown >/dev/null
         K="kubectl --context tf-teardown"
-        VOLS=$($K get pv -o jsonpath='{range .items[?(@.spec.csi.driver=="ebs.csi.aws.com")]}{.spec.csi.volumeHandle}{"\n"}{end}')
+        VOLS=$($K get pv -o jsonpath='{range .items[?(@.spec.csi.driver=="ebs.csi.aws.com")]{.spec.csi.volumeHandle}{"\n"}{end}')
         echo "EBS volumes to be removed: $${VOLS:-none}"
 
-        $K -n argocd delete application root --ignore-not-found --wait=false     # so nothing is recreated
-        $K -n argocd delete application myapp --ignore-not-found --wait=true --timeout=1800s
-        $K -n myapp delete pvc --all --ignore-not-found --wait=true --timeout=600s
+        $K -n argocd delete application root --ignore-not-found --wait=false     # stop sync loop
+        $K -n argocd delete applications --all --ignore-not-found --wait=true --timeout=120s
+        $K delete pvc --all-namespaces --all --ignore-not-found --wait=true --timeout=600s
         wait_until "no persistent volumes left" 900 bash -c "[ \"\$($K get pv --no-headers | wc -l)\" -eq 0 ]"
       else
         echo "cluster is already gone, checking the AWS side only"
@@ -95,5 +95,5 @@ resource "terraform_data" "teardown_guard" {
       wait_until "EBS volumes deleted" 900 vols_gone
       echo "teardown guard: everything is gone"
     EOT
-  }
+   }
 }
