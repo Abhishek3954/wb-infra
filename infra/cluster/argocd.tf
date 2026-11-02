@@ -70,6 +70,7 @@ resource "terraform_data" "teardown_guard" {
     aws_eks_pod_identity_association.eso,
     aws_iam_role_policy_attachment.lbc,
     aws_iam_role_policy_attachment.eso,
+    aws_iam_role_policy_attachment.ebs_csi,
   ]
 
   provisioner "local-exec" {
