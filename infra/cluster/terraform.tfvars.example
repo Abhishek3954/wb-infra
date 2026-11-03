@@ -1,0 +1,12 @@
+# make sure to remove .example for this file's name. 
+# it should be terraform.tfvars
+
+region                 = "ap-south-1"
+cluster_name           = "whiteboard"
+kubernetes_version     = "1.32"
+node_instance_type     = "m7i-flex.large"     # free-tier eligible instance
+vpc_cidr               = "10.0.0.0/16"
+secret_name            = "myapp/db-credentials"
+gitops_repo_url        = "git@github.com:OWNER/wb-manifests.git"
+gitops_revision        = "main"
+gitops_deploy_key_path = "~/.ssh/wb-manifests"
