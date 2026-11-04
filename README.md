@@ -1,3 +1,7 @@
+[wb-code](https://github.com/Abhishek3954/Whiteboard) — application and CI/CD  
+**wb-infra**  
+[wb-manifests](https://github.com/Abhishek3954/wb-manifests) — Kubernetes platform manifests
+
 # AWS infrastructure
 
 Terraform builds the AWS foundation for Whiteboard in `ap-south-1`: a multi-AZ VPC, private EKS cluster, workload identities, secrets, and Argo CD GitOps bootstrap.
