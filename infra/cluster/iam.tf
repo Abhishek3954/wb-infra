@@ -8,7 +8,11 @@ data "aws_iam_policy_document" "pods_trust" {
   }
 }
 
-# ---- External Secrets: read exactly one secret ----
+# ---- External Secrets: read the database and alert-agent secrets ----
+data "aws_secretsmanager_secret" "alert_agent" {
+  name = "prod/alert-agent"
+}
+
 resource "aws_iam_policy" "eso" {
   name = "myapp-eso-read"
   policy = jsonencode({
@@ -16,7 +20,10 @@ resource "aws_iam_policy" "eso" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
-      Resource = aws_secretsmanager_secret.db.arn
+      Resource = [
+        aws_secretsmanager_secret.db.arn,
+        data.aws_secretsmanager_secret.alert_agent.arn,
+      ]
     }]
   })
 }
