@@ -143,6 +143,19 @@ resource "terraform_data" "teardown_guard" {
         wait_until "no load balancers after myapp Ingress cleanup" 900 no_lbs
         wait_until "Ingress objects removed after load balancer cleanup" 900 no_ingresses
 
+        # Remove all ExternalSecrets while ESO is still running. Some ExternalSecrets
+        # carry an ESO cleanup finalizer; deleting the ESO Application first would
+        # leave those objects blocking namespace deletion with no controller to
+        # remove the finalizer. Root auto-sync is disabled above, so these objects
+        # will not be recreated during teardown.
+        if $K get crd externalsecrets.external-secrets.io >/dev/null 2>&1; then
+          echo "Deleting ExternalSecrets while External Secrets Operator is running..."
+          $K delete externalsecrets.external-secrets.io --all --all-namespaces \
+            --ignore-not-found --wait=true --timeout=600s
+          wait_until "no ExternalSecrets remain" 600 bash -c \
+            "[ -z \"\$($K get externalsecrets.external-secrets.io --all-namespaces -o name 2>/dev/null)\" ]"
+        fi
+
         # With Ingresses and load balancers gone, remove all remaining child
         # Applications. Keep root until the root-app Helm release is removed
         # after this guard, while Argo CD is still running to process its
