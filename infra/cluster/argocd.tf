@@ -104,12 +104,19 @@ resource "terraform_data" "teardown_guard" {
         VOLS=$($K get pv -o jsonpath='{range .items[?(@.spec.csi.driver=="ebs.csi.aws.com")]}{.spec.csi.volumeHandle}{"\n"}{end}')
         echo "EBS volumes to be removed: $${VOLS:-none}"
 
-        # Disable root auto-sync so it does not recreate child Applications
-        # while they are being removed. Keep root until Terraform destroys its
-        # root-app Helm release after this guard completes.
+        # Disable root auto-sync so it does not recreate child Applications,
+        # then disable auto-sync/self-heal on each child. Child Applications
+        # have their own automated sync policies; disabling root alone does
+        # not stop them from recreating resources while teardown removes them.
+        # Keep root until Terraform destroys its root-app Helm release after
+        # this guard completes.
         if $K -n argocd get application root >/dev/null 2>&1; then
           $K -n argocd patch application root --type=merge -p='{"spec":{"syncPolicy":{"automated":null}}}'
         fi
+        for app in $($K -n argocd get applications -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+          [ "$app" = root ] && continue
+          $K -n argocd patch application "$app" --type=merge -p='{"spec":{"syncPolicy":{"automated":null}}}'
+        done
 
         # Remove the Ingress-owning app while the AWS Load Balancer Controller
         # is still running. Ensure legacy live Applications cascade-delete.
@@ -147,7 +154,8 @@ resource "terraform_data" "teardown_guard" {
         # carry an ESO cleanup finalizer; deleting the ESO Application first would
         # leave those objects blocking namespace deletion with no controller to
         # remove the finalizer. Root auto-sync is disabled above, so these objects
-        # will not be recreated during teardown.
+        # will not be recreated during teardown because automatic sync was
+        # disabled on both root and child Applications above.
         if $K get crd externalsecrets.external-secrets.io >/dev/null 2>&1; then
           echo "Deleting ExternalSecrets while External Secrets Operator is running..."
           $K delete externalsecrets.external-secrets.io --all --all-namespaces \
